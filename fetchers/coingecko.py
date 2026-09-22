@@ -60,10 +60,10 @@ def get_coin_detail(coin_id:str):
     market=data.get("market_data") or {}
     return {"categories":data.get("categories") or [],"github_repo":((data.get("links") or {}).get("repos_url") or {}).get("github",[]),"circulating_supply":market.get("circulating_supply"),"total_supply":market.get("total_supply"),"max_supply":market.get("max_supply"),"fully_diluted_valuation":(market.get("fully_diluted_valuation") or {}).get("usd")}
 
-def get_market_pages(pages=5):
+def get_market_pages(pages=5,start_page=1):
     """Fetch a bounded market-cap universe; do not fan out on ambiguous symbols."""
     coins=[]
-    for page in range(1,pages+1):
+    for page in range(start_page,start_page+pages):
         resp=_get("/coins/markets",params={"vs_currency":"usd","order":"market_cap_desc","per_page":250,"page":page,"price_change_percentage":"30d","sparkline":"false"})
         batch=resp.json()
         if not batch:break
