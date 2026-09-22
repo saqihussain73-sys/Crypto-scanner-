@@ -5,7 +5,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from app.config import DEEP_SCAN_BATCH_SIZE,SCAN_INTERVAL_HOURS,REVOLUT_SYMBOLS
 from app.db import SessionLocal,ScanResult,ScanCursor,CachedMarket,CachedResearch,ScanStatus
 from app.scoring import score_onchain,score_dev,score_tokenomics,score_narrative,score_momentum,combine_scores
-from fetchers import coingecko,defillama,github_activity,binance,exchanges
+from fetchers import coingecko,defillama,github_activity,binance,exchanges,coinmarketcap
 logger=logging.getLogger("scanner")
 _scan_lock=threading.Lock()
 MARKET_TTL=timedelta(hours=12)
@@ -138,11 +138,23 @@ def run_scan():
                     cached_research.updated_at=datetime.utcnow()
                 db.commit()
             except coingecko.RateLimited:
-                logger.warning("CoinGecko quota exhausted; retaining saved market data")
-                cursor.offset=(start+completed+1)%len(eligible)
+                logger.warning("CoinGecko quota exhausted; trying CoinMarketCap metadata")
+                try:
+                    detail=coinmarketcap.get_project_info(coin_id,coin.get("symbol") or "")
+                except Exception as exc:
+                    logger.warning("CoinMarketCap unavailable for %s: %s",coin_id,exc)
+                    detail=None
+                if not detail:
+                    cursor.offset=(start+completed+1)%len(eligible)
+                    db.commit()
+                    status(db,"rate_limited","CoinGecko quota exhausted; CoinMarketCap metadata unavailable")
+                    return
+                if cached_research is None:
+                    db.add(CachedResearch(coin_id=coin_id,payload=detail))
+                else:
+                    cached_research.payload=detail
+                    cached_research.updated_at=datetime.utcnow()
                 db.commit()
-                status(db,"rate_limited",f"Market data saved for {len(universe)} coins; CoinGecko quota exhausted; retry at next scheduled scan")
-                return
             except Exception as exc:
                 logger.warning("Coin detail failed for %s: %s",coin_id,exc)
                 completed+=1
