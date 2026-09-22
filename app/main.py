@@ -94,11 +94,26 @@ def five_x_research(r, profile, protocol=None):
             "horizon":"Two-year hypothetical scenario; no forecast or probability",
             "status":"Evidence review; no 5x likelihood assigned"}
 
+def research_readiness(r, profile):
+    p=profile or {}
+    checks={
+      "Sourced project description":bool(len((p.get("description") or "").strip())>=120 and p.get("source_url")),
+      "Official token utility and demand":bool(p.get("token_utility") and p.get("token_utility_source") and p.get("token_demand_mechanism") and p.get("token_demand_source")),
+      "Dated adoption evidence":bool(p.get("adoption_evidence") and p.get("adoption_source") and p.get("adoption_observed_at")),
+      "Supply and unlock assessment":bool(p.get("circulating_supply") and (p.get("max_supply") or p.get("total_supply")) and p.get("supply_risk_assessment") and p.get("supply_risk_source")),
+      "Dated executable liquidity assessment":bool(p.get("liquidity_assessment") and p.get("liquidity_source") and p.get("liquidity_observed_at")),
+      "Valuation comparables and limitations":bool(p.get("valuation_comparison") and p.get("valuation_source") and p.get("valuation_limitations")),
+      "Sourced project-specific risks":bool(p.get("specific_risks") and p.get("risk_source")),
+      "5x price and market cap inputs":bool(r.price_usd and r.price_usd>0 and r.market_cap_usd and r.market_cap_usd>0)
+    }
+    missing=[name for name,ok in checks.items() if not ok]
+    return {"ready":not missing,"completed":len(checks)-len(missing),"required":len(checks),"missing":missing}
+
 @app.get("/api/coins")
 def list_coins(limit:int=Query(100,le=500),min_score:float=0.0,db:Session=Depends(get_session)):
     latest=(db.query(ScanResult.coin_id,func.max(ScanResult.scanned_at).label("max_ts")).group_by(ScanResult.coin_id).subquery())
     rows=(db.query(ScanResult).join(latest,(ScanResult.coin_id==latest.c.coin_id)&(ScanResult.scanned_at==latest.c.max_ts)).order_by(ScanResult.score_total.desc()).limit(limit).all())
-    research_by_id={x.coin_id:{"description":x.payload.get("description"),"homepage":x.payload.get("homepage"),"whitepaper":x.payload.get("whitepaper"),"source_url":x.payload.get("source_url"),"circulating_supply":x.payload.get("circulating_supply"),"max_supply":x.payload.get("max_supply"),"total_supply":x.payload.get("total_supply"),"total_volume_24h_usd":x.payload.get("total_volume_24h_usd"),"updated_at":x.updated_at.isoformat() if x.updated_at else None} for x in db.query(CachedResearch).filter(CachedResearch.coin_id.in_([r.coin_id for r in rows])).all()}
+    research_by_id={x.coin_id:{"description":x.payload.get("description"),"homepage":x.payload.get("homepage"),"whitepaper":x.payload.get("whitepaper"),"source_url":x.payload.get("source_url"),"circulating_supply":x.payload.get("circulating_supply"),"max_supply":x.payload.get("max_supply"),"total_supply":x.payload.get("total_supply"),"total_volume_24h_usd":x.payload.get("total_volume_24h_usd"),**{k:x.payload.get(k) for k in ("token_utility","token_utility_source","token_demand_mechanism","token_demand_source","adoption_evidence","adoption_source","adoption_observed_at","supply_risk_assessment","supply_risk_source","liquidity_assessment","liquidity_source","liquidity_observed_at","valuation_comparison","valuation_source","valuation_limitations","specific_risks","risk_source")},"updated_at":x.updated_at.isoformat() if x.updated_at else None} for x in db.query(CachedResearch).filter(CachedResearch.coin_id.in_([r.coin_id for r in rows])).all()}
     protocol_by_id={}
     for r in rows:
         if r.coin_id and not r.coin_id.startswith("binance:"):
@@ -109,7 +124,7 @@ def list_coins(limit:int=Query(100,le=500),min_score:float=0.0,db:Session=Depend
                     except Exception as exc:logging.info("Protocol economics unavailable for %s: %s",r.coin_id,exc)
                 protocol_by_id[r.coin_id]=protocol
             except Exception as exc:logging.warning("Protocol research unavailable for %s: %s",r.coin_id,exc)
-    return [{"project_research":research_by_id.get(r.coin_id),"five_x_research":five_x_research(r,research_by_id.get(r.coin_id),protocol_by_id.get(r.coin_id)),**{k:getattr(r,k) for k in ("coin_id","symbol","name","market_cap_usd","price_usd","price_change_30d_pct","ath_change_pct","revolut_listed","score_total","score_onchain","score_dev","score_tokenomics","score_narrative","score_momentum","notes")},"scanned_at":r.scanned_at.isoformat() if r.scanned_at else None,"upside":upside_scenario(r),"coverage_pct":round(100*sum(w for w,v in ((.30,r.score_onchain),(.20,r.score_dev),(.25,r.score_tokenomics),(.15,r.score_narrative),(.10,r.score_momentum)) if v is not None)),"fundamentals_ready":sum(v is not None for v in (r.score_onchain,r.score_dev,r.score_tokenomics,r.score_narrative))>=2 and sum(w for w,v in ((.30,r.score_onchain),(.20,r.score_dev),(.25,r.score_tokenomics),(.15,r.score_narrative)) if v is not None)>=.45} for r in rows]
+    return [{"research_readiness":research_readiness(r,research_by_id.get(r.coin_id)),"project_research":research_by_id.get(r.coin_id),"five_x_research":five_x_research(r,research_by_id.get(r.coin_id),protocol_by_id.get(r.coin_id)),**{k:getattr(r,k) for k in ("coin_id","symbol","name","market_cap_usd","price_usd","price_change_30d_pct","ath_change_pct","revolut_listed","score_total","score_onchain","score_dev","score_tokenomics","score_narrative","score_momentum","notes")},"scanned_at":r.scanned_at.isoformat() if r.scanned_at else None,"upside":upside_scenario(r),"coverage_pct":round(100*sum(w for w,v in ((.30,r.score_onchain),(.20,r.score_dev),(.25,r.score_tokenomics),(.15,r.score_narrative),(.10,r.score_momentum)) if v is not None)),"fundamentals_ready":sum(v is not None for v in (r.score_onchain,r.score_dev,r.score_tokenomics,r.score_narrative))>=2 and sum(w for w,v in ((.30,r.score_onchain),(.20,r.score_dev),(.25,r.score_tokenomics),(.15,r.score_narrative)) if v is not None)>=.45} for r in rows]
 @app.get("/api/coins/{coin_id}/history")
 def coin_history(coin_id:str,db:Session=Depends(get_session)):
     rows=db.query(ScanResult).filter(ScanResult.coin_id==coin_id).order_by(ScanResult.scanned_at.asc()).all()
