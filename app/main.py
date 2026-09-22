@@ -5,7 +5,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func
 from sqlalchemy.orm import Session
-from app.db import init_db,get_session,ScanResult
+from app.db import init_db,get_session,ScanResult,ScanStatus
 from app.scheduler import start_scheduler,run_scan
 logging.basicConfig(level=logging.INFO)
 app=FastAPI(title="Crypto Fundamentals Scanner")
@@ -32,3 +32,8 @@ def trigger_scan():
     import threading
     threading.Thread(target=run_scan,daemon=True).start()
     return {"status":"scan_started"}
+
+@app.get("/api/scan/status")
+def scan_status(db:Session=Depends(get_session)):
+    row=db.get(ScanStatus,1)
+    return {"state":row.state if row else "idle","message":row.message if row else "No scan started","last_started":row.last_started.isoformat() if row and row.last_started else None,"last_success":row.last_success.isoformat() if row and row.last_success else None}
