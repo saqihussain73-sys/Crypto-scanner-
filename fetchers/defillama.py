@@ -1,0 +1,14 @@
+import requests
+BASE_URL="https://api.llama.fi"
+_protocols_cache=None
+def _load_protocols():
+    global _protocols_cache
+    if _protocols_cache is None:
+        resp=requests.get(f"{BASE_URL}/protocols",timeout=30)
+        resp.raise_for_status()
+        _protocols_cache=resp.json()
+    return _protocols_cache
+def get_onchain_signal(coingecko_id:str):
+    match=next((p for p in _load_protocols() if p.get("gecko_id")==coingecko_id),None)
+    if not match:return None
+    return {"tvl_usd":match.get("tvl"),"tvl_change_7d_pct":match.get("change_7d"),"tvl_change_1m_pct":match.get("change_1m"),"chains":match.get("chains",[])}
