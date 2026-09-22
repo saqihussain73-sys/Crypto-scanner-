@@ -1,11 +1,13 @@
 import logging
 import threading
+import requests
 from apscheduler.schedulers.background import BackgroundScheduler
 from app.config import DEEP_SCAN_BATCH_SIZE,SCAN_INTERVAL_HOURS,REVOLUT_SYMBOLS
 from app.db import SessionLocal,ScanResult,ScanCursor
 from app.scoring import score_onchain,score_dev,score_tokenomics,score_narrative,score_momentum,combine_scores
 from fetchers import coingecko,defillama,github_activity,binance
 logger=logging.getLogger("scanner")
+_scan_lock=threading.Lock()
 def _get_cursor(db):
     cursor=db.query(ScanCursor).first()
     if not cursor:
@@ -14,6 +16,9 @@ def _get_cursor(db):
         db.commit()
     return cursor
 def run_scan():
+    if not _scan_lock.acquire(blocking=False):
+        logger.info("Scan already running; skipping overlapping request")
+        return
     logger.info("Starting scan run")
     db=SessionLocal()
     try:
@@ -33,19 +38,26 @@ def run_scan():
                 universe.append(best)
                 seen.add(best["id"])
         logger.info("Resolved %s Binance-listed coins",len(universe))
-        categories=coingecko.get_category_momentum()
+        try:categories=coingecko.get_category_momentum()
+        except coingecko.RateLimited:
+            logger.warning("Category data unavailable due to rate limit; continuing without it")
+            categories={}
         cursor=_get_cursor(db)
         start=cursor.offset%max(len(universe),1)
         batch=(universe[start:]+universe[:start])[:DEEP_SCAN_BATCH_SIZE]
         deep_ids={c["id"] for c in batch}
-        cursor.offset=(start+DEEP_SCAN_BATCH_SIZE)%max(len(universe),1)
         db.commit()
+        rate_limited=False
         for coin in universe:
             coin_id=coin.get("id")
             detail=onchain=dev=None
-            if coin_id in deep_ids:
+            if coin_id in deep_ids and not rate_limited:
                 try:detail=coingecko.get_coin_detail(coin_id)
-                except RuntimeError as exc:logger.warning("%s: %s",coin_id,exc)
+                except coingecko.RateLimited as exc:
+                    logger.warning("Stopping deep scan after rate limit at %s: %s",coin_id,exc)
+                    deep_ids.discard(coin_id)
+                    rate_limited=True
+                except requests.RequestException as exc:logger.warning("Coin detail unavailable for %s: %s",coin_id,exc)
                 onchain=defillama.get_onchain_signal(coin_id)
                 if detail:dev=github_activity.get_dev_activity(detail.get("github_repo"))
             tokenomics_result=score_tokenomics(detail) if detail else (None,[])
@@ -55,12 +67,19 @@ def run_scan():
             notes=notes+tokenomics_notes
             if coin_id not in deep_ids:notes.append("not_deep_scanned_this_run")
             db.add(ScanResult(coin_id=coin_id,symbol=coin.get("symbol"),name=coin.get("name"),market_cap_usd=coin.get("market_cap"),price_usd=coin.get("current_price"),price_change_30d_pct=coin.get("price_change_percentage_30d_in_currency"),ath_change_pct=coin.get("ath_change_percentage"),score_total=total,score_onchain=subscores["onchain_usage"],score_dev=subscores["dev_activity"],score_tokenomics=subscores["tokenomics"],score_narrative=subscores["narrative"],score_momentum=subscores["momentum"],notes=notes,revolut_listed=(coin.get("symbol") or "").upper() in REVOLUT_SYMBOLS))
+        if not rate_limited:
+            cursor.offset=(start+DEEP_SCAN_BATCH_SIZE)%max(len(universe),1)
         db.commit()
         logger.info("Scan run complete")
+    except coingecko.RateLimited:
+        logger.warning("Scan deferred: CoinGecko rate limit. Existing results retained.")
+        db.rollback()
     except Exception:
         logger.exception("Scan run failed")
         db.rollback()
-    finally:db.close()
+    finally:
+        db.close()
+        _scan_lock.release()
 def start_scheduler():
     threading.Thread(target=run_scan,daemon=True).start()
     scheduler=BackgroundScheduler()
