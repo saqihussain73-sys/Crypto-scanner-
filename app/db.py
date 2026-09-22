@@ -42,3 +42,17 @@ def get_session():
         yield db
     finally:
         db.close()
+
+class CachedMarket(Base):
+    __tablename__="cached_market"
+    coin_id=Column(String,primary_key=True)
+    payload=Column(JSON,nullable=False)
+    updated_at=Column(DateTime,default=datetime.utcnow,index=True)
+class ScanStatus(Base):
+    __tablename__="scan_status"
+    id=Column(Integer,primary_key=True,default=1)
+    state=Column(String,default="idle")
+    message=Column(String,default="")
+    last_started=Column(DateTime,nullable=True)
+    last_success=Column(DateTime,nullable=True)
+    updated_at=Column(DateTime,default=datetime.utcnow)
