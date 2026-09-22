@@ -56,3 +56,9 @@ class ScanStatus(Base):
     last_started=Column(DateTime,nullable=True)
     last_success=Column(DateTime,nullable=True)
     updated_at=Column(DateTime,default=datetime.utcnow)
+
+class CachedResearch(Base):
+    __tablename__="cached_research"
+    coin_id=Column(String,primary_key=True)
+    payload=Column(JSON,nullable=False)
+    updated_at=Column(DateTime,default=datetime.utcnow,index=True)
