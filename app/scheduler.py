@@ -5,7 +5,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from app.config import DEEP_SCAN_BATCH_SIZE,SCAN_INTERVAL_HOURS,REVOLUT_SYMBOLS
 from app.db import SessionLocal,ScanResult,ScanCursor,CachedMarket,ScanStatus
 from app.scoring import score_onchain,score_dev,score_tokenomics,score_narrative,score_momentum,combine_scores
-from fetchers import coingecko,defillama,github_activity,binance
+from fetchers import coingecko,defillama,github_activity,binance,exchanges
 logger=logging.getLogger("scanner")
 _scan_lock=threading.Lock()
 MARKET_TTL=timedelta(hours=12)
@@ -36,10 +36,15 @@ def run_scan():
     try:
         status(db,"running","Refreshing market data")
         prior=previous_results(db)
-        symbols=binance.get_binance_base_assets()
-        logger.info("Binance reports %s actively-traded base assets",len(symbols))
+        exchange_assets,exchange_errors=exchanges.get_exchange_assets()
+        symbols=set().union(*exchange_assets.values())
+        # Retain previously researched assets when a provider is unavailable.
+        symbols.update((r.symbol or "").upper() for r in prior.values() if r.symbol)
+        if not symbols:
+            raise RuntimeError("No exchange market data or cached coins available")
+        logger.info("Exchange discovery: %s symbols; provider errors: %s",len(symbols),exchange_errors)
         cached=db.query(CachedMarket).all()
-        # Binance defines the complete discovery universe, including coins with
+        # Public exchange listings define the discovery universe, including coins with
         # no CoinGecko match or market-cap estimate.
         by_symbol={}
         for row in cached:
@@ -81,7 +86,7 @@ def run_scan():
                 previous=next((r for r in prior.values() if (r.symbol or "").upper()==symbol),None)
                 market={"id":previous.coin_id if previous else "binance:"+symbol.lower(),"symbol":symbol.lower(),"name":previous.name if previous else symbol,"market_cap":previous.market_cap_usd if previous else None,"current_price":previous.price_usd if previous else None,"price_change_percentage_30d_in_currency":previous.price_change_30d_pct if previous else None,"ath_change_percentage":previous.ath_change_pct if previous else None}
             universe.append(market)
-        logger.info("Preserved full Binance universe: %s coins; %s market-data matches",len(universe),len(by_symbol))
+        logger.info("Preserved exchange universe: %s coins; %s market-data matches",len(universe),len(by_symbol))
         cursor=db.get(ScanCursor,1)
         if cursor is None:
             cursor=ScanCursor(id=1,offset=0)
