@@ -7,6 +7,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 from app.db import init_db,get_session,ScanResult,ScanStatus
 from app.scheduler import start_scheduler,run_scan
+from fetchers import defillama
 logging.basicConfig(level=logging.INFO)
 app=FastAPI(title="Crypto Scanner")
 STATIC_DIR=Path(__file__).resolve().parent.parent/"static"
@@ -24,10 +25,22 @@ def upside_scenario(r):
     # A numerical score alone is not evidence for a project-specific return thesis.
     # Only show a thesis when it is backed by dated, attributed source observations.
     evidence=(r.notes or [])
+    research=None
+    if r.coin_id and not r.coin_id.startswith("binance:"):
+        try:
+            research=defillama.get_research(r.coin_id)
+        except Exception:
+            logging.exception("Protocol research unavailable for %s",r.coin_id)
     thesis="Research pending — no verified coin-specific investment thesis available."
+    if research and research.get("tvl_usd") is not None and research.get("tvl_change_1m_pct") is not None:
+        direction="increased" if research["tvl_change_1m_pct"]>=0 else "decreased"
+        thesis=(f"{research['protocol']} protocol TVL {direction} "
+                f"{abs(research['tvl_change_1m_pct']):.1f}% over one month to "
+                f"${research['tvl_usd']:,.0f}; this measures protocol deposits, "
+                "not token-holder returns or a 5x forecast.")
     return {"cap_tier":tier,"x5_cap_usd":cap*5 if cap and cap>0 else None,
             "x10_cap_usd":cap*10 if cap and cap>0 else None,
-            "thesis":thesis,"thesis_status":"pending",
+            "thesis":thesis,"thesis_status":"observed" if research and research.get("tvl_usd") is not None and research.get("tvl_change_1m_pct") is not None else "pending","research":research,
             "risk":"Token dilution, liquidity and future valuation have not been assessed."}
 
 @app.get("/api/coins")
