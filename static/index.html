@@ -4,7 +4,7 @@
 :root{color-scheme:dark;--bg:#0b0d12;--panel:#151922;--line:#303744;--muted:#a1a9b8;--green:#55d6a0;--red:#ff8585}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:#edf0f5;font:15px system-ui,sans-serif;padding:20px 14px 60px}.wrap{max-width:1100px;margin:auto}h1{font-size:24px;margin:8px 0}.sub,.muted{color:var(--muted)}.sub{line-height:1.5}.controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:20px 0}button,input,select{background:var(--panel);border:1px solid var(--line);color:inherit;border-radius:9px;padding:10px;font:inherit}input{width:72px}.status{font-size:13px;color:var(--muted);margin:12px 0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:12px}.coin{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:15px;min-width:0}.top{display:flex;justify-content:space-between;gap:12px;align-items:start}.name{font-size:17px;font-weight:700;overflow-wrap:anywhere}.ticker{color:var(--muted);font-size:13px;margin-top:3px}.score{text-align:right;font-weight:700;font-size:17px;white-space:nowrap}.pending{color:#e9bb6b;font-size:13px}.coverage{color:var(--muted);font-size:12px;margin-top:5px}.stats{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0}.stat{min-width:0}.stat small{display:block;color:var(--muted);margin-bottom:4px}.stat span{overflow-wrap:anywhere}.positive{color:var(--green)}.negative{color:var(--red)}details{border-top:1px solid var(--line);padding-top:10px}summary{cursor:pointer;color:#b6cafa}dl{display:grid;grid-template-columns:1fr auto;gap:8px;font-size:13px}dt{color:var(--muted)}dd{margin:0}.notes{font-size:12px;line-height:1.5;overflow-wrap:anywhere;color:var(--muted)}.thesis{line-height:1.5;margin:12px 0;font-size:13px}.scenario{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.chip{background:#252c39;border-radius:7px;padding:6px 9px;font-size:12px}.empty{padding:30px;text-align:center;color:var(--muted)}
 </style></head><body><main class="wrap"><h1>Crypto Scanner</h1><p class="sub">Coins discovered through public Kraken and Coinbase listings and saved research. A fundamentals score is shown only when at least two fundamental categories covering 45% of the model's total weight have data. Other coins remain visible as pending. Scores are research signals, not investment recommendations.</p>
-<div class="controls"><label>View <select id="view"><option value="research">5x research</option><option value="fundamentals">Fundamentals</option></select></label><label>Min ready score <input id="minScore" type="number" value="0" min="0" max="100"></label><button id="refresh">Refresh</button><button id="trigger">Trigger scan</button></div><div class="status" id="status">Loading…</div><div class="status" id="scanStatus" aria-live="polite">Checking scan status…</div><div class="grid" id="coins"></div></main>
+<div class="controls"><label>View <select id="view"><option value="research">5x case (A–Z; no return ranking)</option><option value="fundamentals">Fundamentals</option></select></label><label>Min ready score <input id="minScore" type="number" value="0" min="0" max="100"></label><button id="refresh">Refresh</button><button id="trigger">Trigger scan</button></div><div class="status" id="status">Loading…</div><div class="status" id="scanStatus" aria-live="polite">Checking scan status…</div><div class="grid" id="coins"></div></main>
 <script>
 let coins=[];
 const el=id=>document.getElementById(id);
@@ -16,7 +16,7 @@ function render(){
  const min=Number(el('minScore').value)||0;
  const view=el('view').value;
  const data=coins.filter(c=>!c.fundamentals_ready||c.score_total>=min).sort((a,b)=>view==='research'
-  ?(b.five_x_research?.research_index||0)-(a.five_x_research?.research_index||0)||(a.market_cap_usd||Infinity)-(b.market_cap_usd||Infinity)
+  ?(a.name||a.symbol||'').localeCompare(b.name||b.symbol||'')
   :Number(b.fundamentals_ready)-Number(a.fundamentals_ready)||(b.fundamentals_ready?(b.score_total||0)-(a.score_total||0):(b.coverage_pct||0)-(a.coverage_pct||0)));
  const root=el('coins');root.replaceChildren();
  for(const c of data){
@@ -25,14 +25,23 @@ function render(){
   const stats=field(card,'div','stats','');for(const [label,value] of [['Price',money(c.price_usd)],['Market cap',money(c.market_cap_usd)],['30-day change',pct(c.price_change_30d_pct)],['From ATH',pct(c.ath_change_pct)]]){const item=field(stats,'div','stat','');field(item,'small','',label);const v=field(item,'span','',value);if(label.includes('change')||label.includes('ATH'))v.className=value.startsWith('+')?'positive':value.startsWith('-')?'negative':''}
   const fx=c.five_x_research||{};
   const researchBox=document.createElement('details');card.append(researchBox);
-  field(researchBox,'summary','','5x research · '+num(fx.research_index,0)+'/'+num(fx.research_fields_total,0)+' evidence fields');
-  field(researchBox,'p','notes','Research completeness is NOT the probability of a 5x return or an investment ranking. Two-year scenario only.');
-  field(researchBox,'p','notes','5x price: '+money(fx.x5_price_usd)+' · market cap at current supply: '+money(fx.x5_market_cap_current_supply_usd));
-  if(fx.x5_market_cap_max_supply_usd!=null)field(researchBox,'p','notes','5x price × maximum/total supply: '+money(fx.x5_market_cap_max_supply_usd)+' (illustrative dilution scenario, not an unlock forecast).');
-  if(fx.circulating_share_pct!=null)field(researchBox,'p','notes','Circulating share of reported supply: '+num(fx.circulating_share_pct,1)+'%');
-  if(fx.volume_to_cap_pct!=null)field(researchBox,'p','notes','Reported 24h volume / market cap: '+num(fx.volume_to_cap_pct,2)+'% (not order-book liquidity).');
-  field(researchBox,'p','notes','Evidence gaps: '+((fx.missing||[]).join(', ')||'Token demand, future unlocks and executable liquidity still require verification.'));
-  field(researchBox,'p','notes','Adoption → token demand: not established from project descriptions alone. Check whether fees, collateral, staking or another required use actually creates token demand.');
+  field(researchBox,'summary','','5x case: adoption, token demand, supply and risks');
+  field(researchBox,'p','notes','Two-year hypothetical scenario, not a forecast or a probability of achieving 5x.');
+  field(researchBox,'p','thesis','5x price: '+money(fx.x5_price_usd)+' · required market cap at current supply: '+money(fx.x5_market_cap_current_supply_usd));
+  if(fx.x5_market_cap_max_supply_usd!=null)field(researchBox,'p','notes','At reported maximum/total supply, 5x price implies '+money(fx.x5_market_cap_max_supply_usd)+' valuation; not a forecast of future circulating supply.');
+  field(researchBox,'p','thesis','What the data actually shows');
+  for(const observation of fx.observations||[]){
+    field(researchBox,'p','notes',observation.label+': '+observation.observation);
+    if(observation.source&&/^https:\/\//i.test(observation.source)){
+      const link=document.createElement('a');link.href=observation.source;link.target='_blank';link.rel='noopener noreferrer';link.textContent='View '+observation.label+' source';researchBox.append(link);
+    }
+    if(observation.observed_at)field(researchBox,'p','notes','Data retrieved: '+(typeof observation.observed_at==='number'?new Date(observation.observed_at*1000):new Date(observation.observed_at+'Z')).toLocaleString());
+  }
+  if(!(fx.observations||[]).length)field(researchBox,'p','notes','No attributable adoption, supply or volume observations available yet.');
+  field(researchBox,'p','thesis','Does project adoption benefit this token?');
+  field(researchBox,'p','notes',fx.token_demand||'Token-demand mechanism unverified.');
+  field(researchBox,'p','thesis','What could prevent 5x / what must be checked');
+  for(const question of fx.unresolved||[])field(researchBox,'p','notes','• '+question);
   const up=c.upside||{};const scenarios=field(card,'div','scenario','');field(scenarios,'span','chip',up.cap_tier||'Cap unknown');
   const research=c.project_research||{};
   const about=document.createElement('details');card.append(about);
