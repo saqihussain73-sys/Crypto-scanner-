@@ -3,7 +3,7 @@ import threading
 from datetime import datetime,timedelta
 from apscheduler.schedulers.background import BackgroundScheduler
 from app.config import DEEP_SCAN_BATCH_SIZE,SCAN_INTERVAL_HOURS,REVOLUT_SYMBOLS
-from app.db import SessionLocal,ScanResult,ScanCursor,CachedMarket,ScanStatus
+from app.db import SessionLocal,ScanResult,ScanCursor,CachedMarket,CachedResearch,ScanStatus
 from app.scoring import score_onchain,score_dev,score_tokenomics,score_narrative,score_momentum,combine_scores
 from fetchers import coingecko,defillama,github_activity,binance,exchanges
 logger=logging.getLogger("scanner")
@@ -110,8 +110,12 @@ def run_scan():
             db.add(ScanResult(coin_id=coin_id,symbol=market.get("symbol"),name=market.get("name"),market_cap_usd=market.get("market_cap"),price_usd=market.get("current_price"),price_change_30d_pct=market.get("price_change_percentage_30d_in_currency"),ath_change_pct=market.get("ath_change_percentage"),revolut_listed=(market.get("symbol") or "").upper() in REVOLUT_SYMBOLS,score_total=total,score_onchain=subscores["onchain_usage"],score_dev=subscores["dev_activity"],score_tokenomics=subscores["tokenomics"],score_narrative=subscores["narrative"],score_momentum=subscores["momentum"],notes=notes))
         db.commit()
         status(db,"running",f"Saved market data for {len(universe)} coins; assessing fundamentals")
-        start=cursor.offset%len(universe)
-        batch=[c for c in (universe[start:]+universe[:start]) if not c["id"].startswith("binance:")][:min(DEEP_SCAN_BATCH_SIZE,5)]
+        eligible=[c for c in universe if not c["id"].startswith("binance:")]
+        if not eligible:
+            status(db,"complete","No resolved coin IDs available",success=True)
+            return
+        start=cursor.offset%len(eligible)
+        batch=(eligible[start:]+eligible[:start])[:min(DEEP_SCAN_BATCH_SIZE,5)]
         completed=0
         try:
             category_momentum=coingecko.get_category_momentum()
@@ -124,11 +128,18 @@ def run_scan():
             if previous and previous.scanned_at and datetime.utcnow()-previous.scanned_at<FUNDAMENTAL_TTL and any(getattr(previous,key) is not None for key in ("score_onchain","score_dev","score_tokenomics","score_narrative")):
                 completed+=1
                 continue
+            cached_research=db.get(CachedResearch,coin_id)
             try:
-                detail=coingecko.get_coin_detail(coin_id)
+                detail=cached_research.payload if cached_research and cached_research.updated_at and datetime.utcnow()-cached_research.updated_at<FUNDAMENTAL_TTL else coingecko.get_coin_detail(coin_id)
+                if not cached_research:
+                    db.add(CachedResearch(coin_id=coin_id,payload=detail))
+                elif detail is not cached_research.payload:
+                    cached_research.payload=detail
+                    cached_research.updated_at=datetime.utcnow()
+                db.commit()
             except coingecko.RateLimited:
                 logger.warning("CoinGecko quota exhausted; retaining saved market data")
-                cursor.offset=(start+completed)%len(universe)
+                cursor.offset=(start+completed+1)%len(eligible)
                 db.commit()
                 status(db,"rate_limited",f"Market data saved for {len(universe)} coins; CoinGecko quota exhausted; retry at next scheduled scan")
                 return
@@ -158,7 +169,7 @@ def run_scan():
                 row.notes=notes+token_notes
                 db.commit()
             completed+=1
-        cursor.offset=(start+completed)%len(universe)
+        cursor.offset=(start+completed)%len(eligible)
         db.commit()
         status(db,"complete",f"Saved {len(universe)} market records; processed {completed} fundamentals candidates",success=True)
         logger.info("Scan run complete: %s market records; %s fundamentals candidates",len(universe),completed)
