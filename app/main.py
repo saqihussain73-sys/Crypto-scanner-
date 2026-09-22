@@ -64,6 +64,11 @@ def five_x_research(r, profile, protocol=None):
             if econ.get(key) is not None:
                 evidence.append({"label":label,"observation":f"${econ[key]:,.0f} reported for the matched protocol; not necessarily paid to token holders.",
                                  "source":econ.get("source"),"observed_at":econ.get("retrieved_at")})
+        if econ.get("holders_revenue_30d_usd") is not None:
+            evidence.append({"label":"Reported token-holder revenue, last 30 days",
+                             "observation":f"${econ['holders_revenue_30d_usd']:,.0f} reported by DeFiLlama for the matched protocol; confirm eligible token and distribution mechanics in official docs.",
+                             "source":econ.get("holders_revenue_methodology_url") or econ.get("source"),
+                             "observed_at":econ.get("retrieved_at")})
     if volume is not None and cap and cap>0:
         evidence.append({"label":"Reported trading activity",
                          "observation":f"24h reported volume ${volume:,.0f}; {100*volume/cap:.2f}% of market cap. This is not executable liquidity.",
@@ -79,6 +84,8 @@ def five_x_research(r, profile, protocol=None):
                       "What token unlocks or emissions are scheduled over the next two years?",
                       "What are the project's fees/revenue, active users and direct competitors?",
                       "What is the executable order-book or DEX liquidity at the intended trade size?"])
+    if protocol and protocol.get("economics") and protocol["economics"].get("holders_revenue_30d_usd") is not None:
+        questions.append("DeFiLlama reports token-holder revenue; verify which token receives it, eligibility and distribution mechanics in official documentation.")
     return {"observations":evidence,"unresolved":questions,
             "token_demand":"Unverified: protocol usage and governance rights alone do not establish token buying pressure.",
             "x5_price_usd":price*5 if price and price>0 else None,
