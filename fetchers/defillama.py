@@ -39,10 +39,16 @@ def get_protocol_economics(slug):
     data=response.json()
     result={"fees_24h_usd":data.get("total24h"),"fees_30d_usd":data.get("total30d"),
             "source":"https://defillama.com/fees/"+slug,"retrieved_at":int(now)}
-    revenue=requests.get(f"{BASE_URL}/summary/fees/{slug}",params={"dataType":"dailyRevenue"},timeout=12)
-    revenue.raise_for_status()
-    rev=revenue.json()
-    result["revenue_24h_usd"]=rev.get("total24h")
-    result["revenue_30d_usd"]=rev.get("total30d")
+    for metric,kind in (("revenue","dailyRevenue"),("holders_revenue","dailyHoldersRevenue")):
+        try:
+            response=requests.get(f"{BASE_URL}/summary/fees/{slug}",params={"dataType":kind},timeout=12)
+            response.raise_for_status()
+            payload=response.json()
+            result[metric+"_24h_usd"]=payload.get("total24h")
+            result[metric+"_30d_usd"]=payload.get("total30d")
+            result[metric+"_methodology_url"]=payload.get("methodologyURL")
+        except requests.RequestException:
+            result[metric+"_24h_usd"]=None
+            result[metric+"_30d_usd"]=None
     _fees_cache[slug]=(now,result)
     return result
