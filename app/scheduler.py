@@ -39,20 +39,26 @@ def run_scan():
         symbols=binance.get_binance_base_assets()
         logger.info("Binance reports %s actively-traded base assets",len(symbols))
         cached=db.query(CachedMarket).all()
-        fresh=[c.payload for c in cached if c.updated_at and datetime.utcnow()-c.updated_at<MARKET_TTL]
-        if fresh:
-            markets=fresh
-            logger.info("Using %s cached market records",len(markets))
-        else:
-            # Fetch the most liquid CoinGecko market pages instead of thousands of
-            # ambiguous symbol matches. Reuse saved data if a page is rate-limited.
+        # Binance defines the complete discovery universe, including coins with
+        # no CoinGecko match or market-cap estimate.
+        by_symbol={}
+        for row in cached:
+            market=row.payload
+            symbol=(market.get("symbol") or "").upper()
+            if symbol in symbols and (symbol not in by_symbol or (market.get("market_cap") or 0)>(by_symbol[symbol].get("market_cap") or 0)):
+                by_symbol[symbol]=market
+        # Refresh only a small rotating slice of CoinGecko's market-cap pages.
+        # Pages 1-5 alone omit small caps; the cursor traverses all 40 pages.
+        page_cursor=db.get(ScanCursor,2)
+        if page_cursor is None:
+            page_cursor=ScanCursor(id=2,offset=0)
+            db.add(page_cursor)
+            db.commit()
+        stale=not cached or not any(c.updated_at and datetime.utcnow()-c.updated_at<MARKET_TTL for c in cached)
+        if stale:
+            page=page_cursor.offset%40+1
             try:
-                markets=coingecko.get_market_pages(pages=5)
-            except coingecko.RateLimited:
-                if not cached:raise
-                logger.warning("CoinGecko rate limited; using %s stale cached market records",len(cached))
-                markets=[c.payload for c in cached]
-            if markets:
+                markets=coingecko.get_market_pages(pages=1,start_page=page)
                 for market in markets:
                     row=db.get(CachedMarket,market["id"])
                     if row is None:
@@ -61,16 +67,21 @@ def run_scan():
                     else:
                         row.payload=market
                         row.updated_at=datetime.utcnow()
+                    symbol=(market.get("symbol") or "").upper()
+                    if symbol in symbols and (symbol not in by_symbol or (market.get("market_cap") or 0)>(by_symbol[symbol].get("market_cap") or 0)):
+                        by_symbol[symbol]=market
+                page_cursor.offset=(page_cursor.offset+1)%40
                 db.commit()
-        by_symbol={}
-        for market in markets:
-            symbol=(market.get("symbol") or "").upper()
-            if symbol in symbols and (symbol not in by_symbol or (market.get("market_cap") or 0)>(by_symbol[symbol].get("market_cap") or 0)):
-                by_symbol[symbol]=market
-        universe=list(by_symbol.values())
-        if not universe:
-            raise RuntimeError("No market data available; existing results preserved")
-        logger.info("Resolved %s Binance-listed coins",len(universe))
+            except coingecko.RateLimited:
+                logger.warning("CoinGecko rate limited; keeping full Binance universe and cached markets")
+        universe=[]
+        for symbol in sorted(symbols):
+            market=by_symbol.get(symbol)
+            if market is None:
+                previous=next((r for r in prior.values() if (r.symbol or "").upper()==symbol),None)
+                market={"id":previous.coin_id if previous else "binance:"+symbol.lower(),"symbol":symbol.lower(),"name":previous.name if previous else symbol,"market_cap":previous.market_cap_usd if previous else None,"current_price":previous.price_usd if previous else None,"price_change_percentage_30d_in_currency":previous.price_change_30d_pct if previous else None,"ath_change_percentage":previous.ath_change_pct if previous else None}
+            universe.append(market)
+        logger.info("Preserved full Binance universe: %s coins; %s market-data matches",len(universe),len(by_symbol))
         cursor=db.get(ScanCursor,1)
         if cursor is None:
             cursor=ScanCursor(id=1,offset=0)
@@ -90,11 +101,12 @@ def run_scan():
             }
             total,notes=combine_scores(subscores)
             if not recent:notes.append("pending_fundamentals")
+            if coin_id.startswith("binance:"):notes.append("market_data_unavailable")
             db.add(ScanResult(coin_id=coin_id,symbol=market.get("symbol"),name=market.get("name"),market_cap_usd=market.get("market_cap"),price_usd=market.get("current_price"),price_change_30d_pct=market.get("price_change_percentage_30d_in_currency"),ath_change_pct=market.get("ath_change_percentage"),revolut_listed=(market.get("symbol") or "").upper() in REVOLUT_SYMBOLS,score_total=total,score_onchain=subscores["onchain_usage"],score_dev=subscores["dev_activity"],score_tokenomics=subscores["tokenomics"],score_narrative=subscores["narrative"],score_momentum=subscores["momentum"],notes=notes))
         db.commit()
         status(db,"running",f"Saved market data for {len(universe)} coins; assessing fundamentals")
         start=cursor.offset%len(universe)
-        batch=(universe[start:]+universe[:start])[:min(DEEP_SCAN_BATCH_SIZE,10)]
+        batch=[c for c in (universe[start:]+universe[:start]) if not c["id"].startswith("binance:")][:min(DEEP_SCAN_BATCH_SIZE,10)]
         completed=0
         for coin in batch:
             coin_id=coin["id"]
