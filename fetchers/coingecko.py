@@ -19,7 +19,6 @@ def _get(path,params=None):
             try:seconds=max(60,min(900,int((parsedate_to_datetime(retry)-datetime.now(timezone.utc)).total_seconds())))
             except (TypeError,ValueError):seconds=60
         logger.warning("CoinGecko rate limited; pausing %s seconds",seconds)
-        time.sleep(seconds)
         raise RateLimited("CoinGecko HTTP 429; try a later scan")
     resp.raise_for_status()
     return resp
@@ -60,3 +59,13 @@ def get_coin_detail(coin_id:str):
     time.sleep(COINGECKO_SLEEP_SECONDS)
     market=data.get("market_data") or {}
     return {"categories":data.get("categories") or [],"github_repo":((data.get("links") or {}).get("repos_url") or {}).get("github",[]),"circulating_supply":market.get("circulating_supply"),"total_supply":market.get("total_supply"),"max_supply":market.get("max_supply"),"fully_diluted_valuation":(market.get("fully_diluted_valuation") or {}).get("usd")}
+
+def get_market_pages(pages=5):
+    """Fetch a bounded market-cap universe; do not fan out on ambiguous symbols."""
+    coins=[]
+    for page in range(1,pages+1):
+        resp=_get("/coins/markets",params={"vs_currency":"usd","order":"market_cap_desc","per_page":250,"page":page,"price_change_percentage":"30d","sparkline":"false"})
+        batch=resp.json()
+        if not batch:break
+        coins.extend(batch)
+    return coins
