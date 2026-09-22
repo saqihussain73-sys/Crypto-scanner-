@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.db import init_db,get_session,ScanResult,ScanStatus
 from app.scheduler import start_scheduler,run_scan
 logging.basicConfig(level=logging.INFO)
-app=FastAPI(title="Crypto Fundamentals Scanner")
+app=FastAPI(title="Crypto Scanner")
 STATIC_DIR=Path(__file__).resolve().parent.parent/"static"
 app.mount("/static",StaticFiles(directory=STATIC_DIR),name="static")
 @app.on_event("startup")
@@ -18,11 +18,26 @@ def on_startup():
 @app.get("/")
 def dashboard():
     return FileResponse(STATIC_DIR/"index.html")
+def upside_scenario(r):
+    cap=r.market_cap_usd
+    notes=r.notes or []
+    if cap is None or cap<=0:
+        return {"cap_tier":"Unknown","x5_cap_usd":None,"x10_cap_usd":None,"x5_price_multiple":None,"thesis":"Market cap unavailable; a 5x valuation scenario cannot be assessed.","risk":"Market data or token identity is missing."}
+    tier="Micro-cap" if cap<50_000_000 else "Small-cap" if cap<500_000_000 else "Mid-cap" if cap<5_000_000_000 else "Large-cap"
+    coverage=sum(w for w,v in ((.30,r.score_onchain),(.20,r.score_dev),(.25,r.score_tokenomics),(.15,r.score_narrative)) if v is not None)
+    if coverage<.45:
+        thesis=f"A 5x price scenario would require at least a ${cap*5/1e9:,.2f}B market cap at unchanged supply; fundamentals are not yet sufficiently verified."
+    else:
+        signals=[label for label,val in (("on-chain usage",r.score_onchain),("development",r.score_dev),("tokenomics",r.score_tokenomics),("sector activity",r.score_narrative)) if val is not None and val>=65]
+        driver=", ".join(signals[:2]) if signals else "measured fundamentals"
+        thesis=f"A 5x price scenario would require at least a ${cap*5/1e9:,.2f}B market cap at unchanged supply; {driver} may support a valuation case, but the target is not a forecast."
+    return {"cap_tier":tier,"x5_cap_usd":cap*5,"x10_cap_usd":cap*10,"x5_price_multiple":5,"thesis":thesis,"risk":"Token dilution, liquidity and future valuation are not modelled; actual price returns may be lower."}
+
 @app.get("/api/coins")
 def list_coins(limit:int=Query(100,le=500),min_score:float=0.0,db:Session=Depends(get_session)):
     latest=(db.query(ScanResult.coin_id,func.max(ScanResult.scanned_at).label("max_ts")).group_by(ScanResult.coin_id).subquery())
     rows=(db.query(ScanResult).join(latest,(ScanResult.coin_id==latest.c.coin_id)&(ScanResult.scanned_at==latest.c.max_ts)).order_by(ScanResult.score_total.desc()).limit(limit).all())
-    return [{**{k:getattr(r,k) for k in ("coin_id","symbol","name","market_cap_usd","price_usd","price_change_30d_pct","ath_change_pct","revolut_listed","score_total","score_onchain","score_dev","score_tokenomics","score_narrative","score_momentum","notes")},"scanned_at":r.scanned_at.isoformat() if r.scanned_at else None,"coverage_pct":round(100*sum(w for w,v in ((.30,r.score_onchain),(.20,r.score_dev),(.25,r.score_tokenomics),(.15,r.score_narrative),(.10,r.score_momentum)) if v is not None)),"fundamentals_ready":sum(v is not None for v in (r.score_onchain,r.score_dev,r.score_tokenomics,r.score_narrative))>=2 and sum(w for w,v in ((.30,r.score_onchain),(.20,r.score_dev),(.25,r.score_tokenomics),(.15,r.score_narrative)) if v is not None)>=.45} for r in rows]
+    return [{**{k:getattr(r,k) for k in ("coin_id","symbol","name","market_cap_usd","price_usd","price_change_30d_pct","ath_change_pct","revolut_listed","score_total","score_onchain","score_dev","score_tokenomics","score_narrative","score_momentum","notes")},"scanned_at":r.scanned_at.isoformat() if r.scanned_at else None,"upside":upside_scenario(r),"coverage_pct":round(100*sum(w for w,v in ((.30,r.score_onchain),(.20,r.score_dev),(.25,r.score_tokenomics),(.15,r.score_narrative),(.10,r.score_momentum)) if v is not None)),"fundamentals_ready":sum(v is not None for v in (r.score_onchain,r.score_dev,r.score_tokenomics,r.score_narrative))>=2 and sum(w for w,v in ((.30,r.score_onchain),(.20,r.score_dev),(.25,r.score_tokenomics),(.15,r.score_narrative)) if v is not None)>=.45} for r in rows]
 @app.get("/api/coins/{coin_id}/history")
 def coin_history(coin_id:str,db:Session=Depends(get_session)):
     rows=db.query(ScanResult).filter(ScanResult.coin_id==coin_id).order_by(ScanResult.scanned_at.asc()).all()
