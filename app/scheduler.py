@@ -125,38 +125,43 @@ def run_scan():
         for coin in batch:
             coin_id=coin["id"]
             previous=prior.get(coin_id)
-            if previous and previous.scanned_at and datetime.utcnow()-previous.scanned_at<FUNDAMENTAL_TTL and any(getattr(previous,key) is not None for key in ("score_onchain","score_dev","score_tokenomics","score_narrative")):
+            cached_research=db.get(CachedResearch,coin_id)
+            existing=dict(cached_research.payload or {}) if cached_research else {}
+            # A supply-only cache entry is incomplete regardless of its age.
+            needs_about=not existing.get("description") or len(existing.get("description","").strip())<120
+            fresh=cached_research and cached_research.updated_at and datetime.utcnow()-cached_research.updated_at<FUNDAMENTAL_TTL
+            if (not needs_about and fresh and previous and previous.scanned_at
+                    and datetime.utcnow()-previous.scanned_at<FUNDAMENTAL_TTL
+                    and any(getattr(previous,key) is not None for key in ("score_onchain","score_dev","score_tokenomics","score_narrative"))):
                 completed+=1
                 continue
-            cached_research=db.get(CachedResearch,coin_id)
-            try:
-                detail=cached_research.payload if cached_research and cached_research.updated_at and datetime.utcnow()-cached_research.updated_at<FUNDAMENTAL_TTL else coingecko.get_coin_detail(coin_id)
-                if not cached_research:
-                    db.add(CachedResearch(coin_id=coin_id,payload=detail))
-                elif detail is not cached_research.payload:
-                    cached_research.payload=detail
-                    cached_research.updated_at=datetime.utcnow()
-                db.commit()
-            except coingecko.RateLimited:
-                logger.warning("CoinGecko quota exhausted; trying CoinMarketCap metadata")
+            detail=dict(existing)
+            if not fresh or needs_about:
                 try:
-                    detail=coinmarketcap.get_project_info(coin_id,coin.get("symbol") or "")
+                    incoming=coingecko.get_coin_detail(coin_id)
+                    detail.update({k:v for k,v in incoming.items() if v is not None and v!="" and v!=[]})
+                except coingecko.RateLimited:
+                    logger.info("CoinGecko rate limited for %s; preserving existing research",coin_id)
                 except Exception as exc:
-                    logger.warning("CoinMarketCap unavailable for %s: %s",coin_id,exc)
-                    detail=None
-                if not detail:
-                    cursor.offset=(start+completed+1)%len(eligible)
+                    logger.warning("CoinGecko detail unavailable for %s: %s",coin_id,exc)
+                if not detail.get("description") or len(detail.get("description","").strip())<120:
+                    try:
+                        alternative=coinmarketcap.get_project_info(coin_id,coin.get("symbol") or "")
+                        if alternative:
+                            for key in ("description","homepage","whitepaper","source_url","metadata_source"):
+                                if alternative.get(key) and (key not in detail or not detail.get(key) or key=="description"):
+                                    detail[key]=alternative[key]
+                    except Exception as exc:
+                        logger.info("CoinMarketCap metadata unavailable for %s: %s",coin_id,exc)
+                if detail:
+                    if cached_research is None:
+                        cached_research=CachedResearch(coin_id=coin_id,payload=detail)
+                        db.add(cached_research)
+                    else:
+                        cached_research.payload=dict(detail)
+                        cached_research.updated_at=datetime.utcnow()
                     db.commit()
-                    status(db,"rate_limited","CoinGecko quota exhausted; CoinMarketCap metadata unavailable")
-                    return
-                if cached_research is None:
-                    db.add(CachedResearch(coin_id=coin_id,payload=detail))
-                else:
-                    cached_research.payload=detail
-                    cached_research.updated_at=datetime.utcnow()
-                db.commit()
-            except Exception as exc:
-                logger.warning("Coin detail failed for %s: %s",coin_id,exc)
+            if not detail:
                 completed+=1
                 continue
             try:onchain=defillama.get_onchain_signal(coin_id)
