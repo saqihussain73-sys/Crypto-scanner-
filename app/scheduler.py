@@ -23,7 +23,7 @@ def status(db,state,message,success=False):
     db.commit()
 def previous_results(db):
     rows=db.query(ScanResult).order_by(ScanResult.scanned_at.desc(),ScanResult.id.desc()).all()
-    return {r.coin_id:r for r in rows if r.coin_id not in seen} if False else _latest(rows)
+    return _latest(rows)
 def _latest(rows):
     result={}
     for row in rows:result.setdefault(row.coin_id,row)
@@ -46,7 +46,12 @@ def run_scan():
         else:
             # Fetch the most liquid CoinGecko market pages instead of thousands of
             # ambiguous symbol matches. Reuse saved data if a page is rate-limited.
-            markets=coingecko.get_market_pages(pages=5)
+            try:
+                markets=coingecko.get_market_pages(pages=5)
+            except coingecko.RateLimited:
+                if not cached:raise
+                logger.warning("CoinGecko rate limited; using %s stale cached market records",len(cached))
+                markets=[c.payload for c in cached]
             if markets:
                 for market in markets:
                     row=db.get(CachedMarket,market["id"])
