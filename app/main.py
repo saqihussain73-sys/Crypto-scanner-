@@ -21,8 +21,8 @@ def dashboard():
 @app.get("/api/coins")
 def list_coins(limit:int=Query(100,le=500),min_score:float=0.0,db:Session=Depends(get_session)):
     latest=(db.query(ScanResult.coin_id,func.max(ScanResult.scanned_at).label("max_ts")).group_by(ScanResult.coin_id).subquery())
-    rows=(db.query(ScanResult).join(latest,(ScanResult.coin_id==latest.c.coin_id)&(ScanResult.scanned_at==latest.c.max_ts)).filter(ScanResult.score_total>=min_score).order_by(ScanResult.score_total.desc()).limit(limit).all())
-    return [{**{k:getattr(r,k) for k in ("coin_id","symbol","name","market_cap_usd","price_usd","price_change_30d_pct","ath_change_pct","revolut_listed","score_total","score_onchain","score_dev","score_tokenomics","score_narrative","score_momentum","notes")},"scanned_at":r.scanned_at.isoformat() if r.scanned_at else None} for r in rows]
+    rows=(db.query(ScanResult).join(latest,(ScanResult.coin_id==latest.c.coin_id)&(ScanResult.scanned_at==latest.c.max_ts)).order_by(ScanResult.score_total.desc()).limit(limit).all())
+    return [{**{k:getattr(r,k) for k in ("coin_id","symbol","name","market_cap_usd","price_usd","price_change_30d_pct","ath_change_pct","revolut_listed","score_total","score_onchain","score_dev","score_tokenomics","score_narrative","score_momentum","notes")},"scanned_at":r.scanned_at.isoformat() if r.scanned_at else None,"coverage_pct":round(100*sum(w for w,v in ((.30,r.score_onchain),(.20,r.score_dev),(.25,r.score_tokenomics),(.15,r.score_narrative),(.10,r.score_momentum)) if v is not None)),"fundamentals_ready":sum(v is not None for v in (r.score_onchain,r.score_dev,r.score_tokenomics,r.score_narrative))>=2 and sum(w for w,v in ((.30,r.score_onchain),(.20,r.score_dev),(.25,r.score_tokenomics),(.15,r.score_narrative)) if v is not None)>=.45} for r in rows]
 @app.get("/api/coins/{coin_id}/history")
 def coin_history(coin_id:str,db:Session=Depends(get_session)):
     rows=db.query(ScanResult).filter(ScanResult.coin_id==coin_id).order_by(ScanResult.scanned_at.asc()).all()
