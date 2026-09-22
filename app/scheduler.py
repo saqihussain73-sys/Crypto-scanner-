@@ -106,8 +106,13 @@ def run_scan():
         db.commit()
         status(db,"running",f"Saved market data for {len(universe)} coins; assessing fundamentals")
         start=cursor.offset%len(universe)
-        batch=[c for c in (universe[start:]+universe[:start]) if not c["id"].startswith("binance:")][:min(DEEP_SCAN_BATCH_SIZE,10)]
+        batch=[c for c in (universe[start:]+universe[:start]) if not c["id"].startswith("binance:")][:min(DEEP_SCAN_BATCH_SIZE,5)]
         completed=0
+        try:
+            category_momentum=coingecko.get_category_momentum()
+        except (coingecko.RateLimited,Exception) as exc:
+            logger.info("Narrative data unavailable this scan: %s",exc)
+            category_momentum={}
         for coin in batch:
             coin_id=coin["id"]
             previous=prior.get(coin_id)
@@ -118,7 +123,9 @@ def run_scan():
                 detail=coingecko.get_coin_detail(coin_id)
             except coingecko.RateLimited:
                 logger.warning("CoinGecko quota exhausted; retaining saved market data")
-                status(db,"rate_limited",f"Market data saved for {len(universe)} coins; CoinGecko quota exhausted")
+                cursor.offset=(start+completed)%len(universe)
+                db.commit()
+                status(db,"rate_limited",f"Market data saved for {len(universe)} coins; CoinGecko quota exhausted; retry at next scheduled scan")
                 return
             except Exception as exc:
                 logger.warning("Coin detail failed for %s: %s",coin_id,exc)
@@ -134,7 +141,7 @@ def run_scan():
                 dev=None
             token=score_tokenomics(detail)
             token_score,token_notes=token if token else (None,[])
-            scores={"onchain_usage":score_onchain(onchain),"dev_activity":score_dev(dev),"tokenomics":token_score,"narrative":None,"momentum":score_momentum(coin.get("price_change_percentage_30d_in_currency"))}
+            scores={"onchain_usage":score_onchain(onchain),"dev_activity":score_dev(dev),"tokenomics":token_score,"narrative":score_narrative(detail.get("categories"),category_momentum),"momentum":score_momentum(coin.get("price_change_percentage_30d_in_currency"))}
             total,notes=combine_scores(scores)
             row=db.query(ScanResult).filter(ScanResult.coin_id==coin_id).order_by(ScanResult.id.desc()).first()
             if row:
