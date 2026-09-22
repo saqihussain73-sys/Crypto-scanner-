@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Crypto Fundamentals Scanner</title>
+<style>
+:root{--bg:#0b0d12;--panel:#14171f;--border:#262b38;--text:#e6e8ec;--muted:#8a90a2;--good:#3ecf8e;--warn:#e6b450;--bad:#e5534b}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,sans-serif;padding:24px 16px 60px}h1{font-size:20px;margin:0 0 4px}.subtitle{color:var(--muted);font-size:13px;margin-bottom:20px}.controls{display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:16px}.controls input,.controls button{background:var(--panel);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:6px 10px}table{width:100%;border-collapse:collapse;font-size:13px}th,td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--border);white-space:nowrap}th{color:var(--muted);cursor:pointer;position:sticky;top:0;background:var(--bg)}tr:hover{background:var(--panel)}.score-pill{display:inline-block;padding:2px 8px;border-radius:12px;font-weight:600}.score-hi{background:#3ecf8e22;color:var(--good)}.score-mid{background:#e6b45022;color:var(--warn)}.score-lo{background:#e5534b22;color:var(--bad)}.neg{color:var(--bad)}.pos{color:var(--good)}.notes{color:var(--muted);font-size:11px}.breakdown-row{display:none}.breakdown-row td{background:#0f1218;color:var(--muted)}.table-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:8px}.empty{color:var(--muted);padding:40px;text-align:center}
+</style></head><body>
+<h1>Crypto Fundamentals Scanner</h1><div class="subtitle">Universe: active Binance USDT spot pairs. Ranked by available fundamentals scores; price momentum is low-weight and never a filter. Revolut listing is reference-only. Click a row for its score breakdown.</div>
+<div class="controls"><label>Min score: <input id="minScore" type="number" value="0" min="0" max="100" style="width:60px"></label><button id="refreshBtn">Refresh</button><button id="scanBtn">Trigger scan now</button><span id="status" class="notes"></span></div>
+<div class="table-wrap"><table><thead><tr><th data-key="name">Coin</th><th data-key="score_total">Score</th><th data-key="market_cap_usd">Market Cap</th><th data-key="price_usd">Price</th><th data-key="price_change_30d_pct">30d %</th><th data-key="ath_change_pct">vs ATH</th><th data-key="revolut_listed">Revolut</th><th>Notes</th></tr></thead><tbody id="tbody"></tbody></table></div><div id="emptyMsg" class="empty" style="display:none">No results yet — the first scan runs automatically on startup. Check back shortly.</div>
+<script>
+let currentData=[],sortKey="score_total",sortDir=-1;
+function scoreClass(s){return s==null?"":s>=65?"score-hi":s>=45?"score-mid":"score-lo"}
+function fmtNum(n,d=2){return n==null?"—":Number(n).toLocaleString(undefined,{maximumFractionDigits:d})}
+function fmtPct(n){return n==null?"—":'<span class="'+(n>=0?"pos":"neg")+'">'+(n>=0?"+":"")+n.toFixed(1)+"%</span>"}
+function render(){
+ const body=document.getElementById("tbody");
+ const sorted=[...currentData].sort((a,b)=>{let av=a[sortKey],bv=b[sortKey];if(av==null)return 1;if(bv==null)return -1;return(av>bv?1:av<bv?-1:0)*sortDir});
+ body.replaceChildren();document.getElementById("emptyMsg").style.display=sorted.length?"none":"block";
+ for(const c of sorted){
+  const row=document.createElement("tr"),detail=document.createElement("tr");detail.className="breakdown-row";
+  const cells=[(c.symbol||"?").toUpperCase()+" "+(c.name||""),fmtNum(c.score_total,1),"$"+fmtNum(c.market_cap_usd,0),"$"+fmtNum(c.price_usd,c.price_usd<1?6:2),fmtPct(c.price_change_30d_pct),fmtPct(c.ath_change_pct),c.revolut_listed?"✓":"—",(c.notes||[]).join(", ")];
+  cells.forEach((v,i)=>{const td=document.createElement("td");if(i===4||i===5)td.innerHTML=v;else td.textContent=v;if(i===1)td.className="score-pill "+scoreClass(c.score_total);row.appendChild(td)});
+  const td=document.createElement("td");td.colSpan=8;td.textContent="On-chain: "+fmtNum(c.score_onchain,1)+" · Dev: "+fmtNum(c.score_dev,1)+" · Tokenomics: "+fmtNum(c.score_tokenomics,1)+" · Narrative: "+fmtNum(c.score_narrative,1)+" · Momentum: "+fmtNum(c.score_momentum,1)+" (— = missing data, excluded from weighting)";detail.appendChild(td);
+  row.style.cursor="pointer";row.addEventListener("click",()=>detail.style.display=detail.style.display==="table-row"?"none":"table-row");body.append(row,detail);
+ }
+}
+async function load(){const status=document.getElementById("status");status.textContent="Loading…";try{const res=await fetch("/api/coins?min_score="+encodeURIComponent(document.getElementById("minScore").value||0)+"&limit=500");if(!res.ok)throw Error(res.status);currentData=await res.json();render();status.textContent=currentData.length+" coins · updated "+new Date().toLocaleTimeString()}catch(e){status.textContent="Failed to load — is the API reachable?"}}
+document.querySelectorAll("th[data-key]").forEach(th=>th.addEventListener("click",()=>{const key=th.dataset.key;sortDir=sortKey===key?-sortDir:-1;sortKey=key;render()}));
+document.getElementById("refreshBtn").addEventListener("click",load);
+document.getElementById("scanBtn").addEventListener("click",async()=>{document.getElementById("status").textContent="Scan triggered…";try{const res=await fetch("/api/scan/trigger",{method:"POST"});if(!res.ok)throw Error(res.status)}catch(e){document.getElementById("status").textContent="Scan trigger failed"}});
+load();setInterval(load,60000);
+</script></body></html>
