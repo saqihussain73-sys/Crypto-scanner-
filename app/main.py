@@ -1,0 +1,34 @@
+import logging
+from pathlib import Path
+from fastapi import FastAPI,Depends,Query
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+from app.db import init_db,get_session,ScanResult
+from app.scheduler import start_scheduler,run_scan
+logging.basicConfig(level=logging.INFO)
+app=FastAPI(title="Crypto Fundamentals Scanner")
+STATIC_DIR=Path(__file__).resolve().parent.parent/"static"
+app.mount("/static",StaticFiles(directory=STATIC_DIR),name="static")
+@app.on_event("startup")
+def on_startup():
+    init_db()
+    start_scheduler()
+@app.get("/")
+def dashboard():
+    return FileResponse(STATIC_DIR/"index.html")
+@app.get("/api/coins")
+def list_coins(limit:int=Query(100,le=500),min_score:float=0.0,db:Session=Depends(get_session)):
+    latest=(db.query(ScanResult.coin_id,func.max(ScanResult.scanned_at).label("max_ts")).group_by(ScanResult.coin_id).subquery())
+    rows=(db.query(ScanResult).join(latest,(ScanResult.coin_id==latest.c.coin_id)&(ScanResult.scanned_at==latest.c.max_ts)).filter(ScanResult.score_total>=min_score).order_by(ScanResult.score_total.desc()).limit(limit).all())
+    return [{**{k:getattr(r,k) for k in ("coin_id","symbol","name","market_cap_usd","price_usd","price_change_30d_pct","ath_change_pct","revolut_listed","score_total","score_onchain","score_dev","score_tokenomics","score_narrative","score_momentum","notes")},"scanned_at":r.scanned_at.isoformat() if r.scanned_at else None} for r in rows]
+@app.get("/api/coins/{coin_id}/history")
+def coin_history(coin_id:str,db:Session=Depends(get_session)):
+    rows=db.query(ScanResult).filter(ScanResult.coin_id==coin_id).order_by(ScanResult.scanned_at.asc()).all()
+    return [{"scanned_at":r.scanned_at.isoformat(),"score_total":r.score_total,"price_usd":r.price_usd} for r in rows]
+@app.post("/api/scan/trigger")
+def trigger_scan():
+    import threading
+    threading.Thread(target=run_scan,daemon=True).start()
+    return {"status":"scan_started"}
