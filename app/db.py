@@ -2,7 +2,12 @@ from datetime import datetime
 from sqlalchemy import create_engine,Column,String,Float,DateTime,Integer,JSON,Boolean
 from sqlalchemy.orm import sessionmaker,declarative_base
 from app.config import DATABASE_URL
-engine=create_engine(DATABASE_URL,connect_args={"check_same_thread":False} if DATABASE_URL.startswith("sqlite") else {})
+db_url = DATABASE_URL
+if db_url.startswith("postgres://"):
+    db_url = "postgresql://" + db_url[len("postgres://"):]
+if db_url.startswith("postgresql://"):
+    db_url = "postgresql+pg8000://" + db_url[len("postgresql://"):]
+engine=create_engine(db_url,connect_args={"check_same_thread":False} if db_url.startswith("sqlite") else {})
 SessionLocal=sessionmaker(bind=engine,autoflush=False,autocommit=False)
 Base=declarative_base()
 class ScanResult(Base):
