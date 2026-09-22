@@ -72,7 +72,21 @@ def get_coin_detail(coin_id:str):
     data=resp.json()
     time.sleep(COINGECKO_SLEEP_SECONDS)
     market=data.get("market_data") or {}
-    return {"categories":data.get("categories") or [],"github_repo":((data.get("links") or {}).get("repos_url") or {}).get("github",[]),"circulating_supply":market.get("circulating_supply"),"total_supply":market.get("total_supply"),"max_supply":market.get("max_supply"),"fully_diluted_valuation":(market.get("fully_diluted_valuation") or {}).get("usd")}
+    links=data.get("links") or {}
+    def first_https(values):
+        return next((v for v in values if isinstance(v,str) and v.startswith("https://")),None)
+    return {"description":(data.get("description") or {}).get("en") or "",
+            "homepage":first_https(links.get("homepage") or []),
+            "whitepaper":links.get("whitepaper") if isinstance(links.get("whitepaper"),str) and links["whitepaper"].startswith("https://") else None,
+            "source_url":"https://www.coingecko.com/en/coins/"+coin_id,
+            "metadata_source":"CoinGecko",
+            "total_volume_24h_usd":(market.get("total_volume") or {}).get("usd"),
+            "categories":data.get("categories") or [],
+            "github_repo":(links.get("repos_url") or {}).get("github",[]),
+            "circulating_supply":market.get("circulating_supply"),
+            "total_supply":market.get("total_supply"),
+            "max_supply":market.get("max_supply"),
+            "fully_diluted_valuation":(market.get("fully_diluted_valuation") or {}).get("usd")}
 
 def get_market_pages(pages=5,start_page=1):
     """Fetch a bounded market-cap universe; do not fan out on ambiguous symbols."""
