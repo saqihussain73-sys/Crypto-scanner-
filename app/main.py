@@ -20,18 +20,15 @@ def dashboard():
     return FileResponse(STATIC_DIR/"index.html")
 def upside_scenario(r):
     cap=r.market_cap_usd
-    notes=r.notes or []
-    if cap is None or cap<=0:
-        return {"cap_tier":"Unknown","x5_cap_usd":None,"x10_cap_usd":None,"x5_price_multiple":None,"thesis":"Market cap unavailable; a 5x valuation scenario cannot be assessed.","risk":"Market data or token identity is missing."}
-    tier="Micro-cap" if cap<50_000_000 else "Small-cap" if cap<500_000_000 else "Mid-cap" if cap<5_000_000_000 else "Large-cap"
-    coverage=sum(w for w,v in ((.30,r.score_onchain),(.20,r.score_dev),(.25,r.score_tokenomics),(.15,r.score_narrative)) if v is not None)
-    if coverage<.45:
-        thesis=f"A 5x price scenario would require at least a ${cap*5/1e9:,.2f}B market cap at unchanged supply; fundamentals are not yet sufficiently verified."
-    else:
-        signals=[label for label,val in (("on-chain usage",r.score_onchain),("development",r.score_dev),("tokenomics",r.score_tokenomics),("sector activity",r.score_narrative)) if val is not None and val>=65]
-        driver=", ".join(signals[:2]) if signals else "measured fundamentals"
-        thesis=f"A 5x price scenario would require at least a ${cap*5/1e9:,.2f}B market cap at unchanged supply; {driver} may support a valuation case, but the target is not a forecast."
-    return {"cap_tier":tier,"x5_cap_usd":cap*5,"x10_cap_usd":cap*10,"x5_price_multiple":5,"thesis":thesis,"risk":"Token dilution, liquidity and future valuation are not modelled; actual price returns may be lower."}
+    tier="Unknown" if not cap or cap<=0 else ("Micro-cap" if cap<50_000_000 else "Small-cap" if cap<500_000_000 else "Mid-cap" if cap<5_000_000_000 else "Large-cap")
+    # A numerical score alone is not evidence for a project-specific return thesis.
+    # Only show a thesis when it is backed by dated, attributed source observations.
+    evidence=(r.notes or [])
+    thesis="Research pending — no verified coin-specific investment thesis available."
+    return {"cap_tier":tier,"x5_cap_usd":cap*5 if cap and cap>0 else None,
+            "x10_cap_usd":cap*10 if cap and cap>0 else None,
+            "thesis":thesis,"thesis_status":"pending",
+            "risk":"Token dilution, liquidity and future valuation have not been assessed."}
 
 @app.get("/api/coins")
 def list_coins(limit:int=Query(100,le=500),min_score:float=0.0,db:Session=Depends(get_session)):
