@@ -58,6 +58,12 @@ def five_x_research(r, profile, protocol=None):
                      (f"; 30-day change {growth:+.1f}%" if growth is not None else "; 30-day change unavailable"))
         evidence.append({"label":"Protocol deposits (not token demand)","observation":observation,
                          "source":protocol.get("source"),"observed_at":protocol.get("fetched_at")})
+    if protocol and protocol.get("economics"):
+        econ=protocol["economics"]
+        for label,key in (("Protocol fees, last 30 days","fees_30d_usd"),("Protocol revenue, last 30 days","revenue_30d_usd")):
+            if econ.get(key) is not None:
+                evidence.append({"label":label,"observation":f"${econ[key]:,.0f} reported for the matched protocol; not necessarily paid to token holders.",
+                                 "source":econ.get("source"),"observed_at":econ.get("retrieved_at")})
     if volume is not None and cap and cap>0:
         evidence.append({"label":"Reported trading activity",
                          "observation":f"24h reported volume ${volume:,.0f}; {100*volume/cap:.2f}% of market cap. This is not executable liquidity.",
@@ -89,7 +95,12 @@ def list_coins(limit:int=Query(100,le=500),min_score:float=0.0,db:Session=Depend
     protocol_by_id={}
     for r in rows:
         if r.coin_id and not r.coin_id.startswith("binance:"):
-            try:protocol_by_id[r.coin_id]=defillama.get_research(r.coin_id)
+            try:
+                protocol=defillama.get_research(r.coin_id)
+                if protocol and protocol.get("slug"):
+                    try:protocol["economics"]=defillama.get_protocol_economics(protocol["slug"])
+                    except Exception as exc:logging.info("Protocol economics unavailable for %s: %s",r.coin_id,exc)
+                protocol_by_id[r.coin_id]=protocol
             except Exception as exc:logging.warning("Protocol research unavailable for %s: %s",r.coin_id,exc)
     return [{"project_research":research_by_id.get(r.coin_id),"five_x_research":five_x_research(r,research_by_id.get(r.coin_id),protocol_by_id.get(r.coin_id)),**{k:getattr(r,k) for k in ("coin_id","symbol","name","market_cap_usd","price_usd","price_change_30d_pct","ath_change_pct","revolut_listed","score_total","score_onchain","score_dev","score_tokenomics","score_narrative","score_momentum","notes")},"scanned_at":r.scanned_at.isoformat() if r.scanned_at else None,"upside":upside_scenario(r),"coverage_pct":round(100*sum(w for w,v in ((.30,r.score_onchain),(.20,r.score_dev),(.25,r.score_tokenomics),(.15,r.score_narrative),(.10,r.score_momentum)) if v is not None)),"fundamentals_ready":sum(v is not None for v in (r.score_onchain,r.score_dev,r.score_tokenomics,r.score_narrative))>=2 and sum(w for w,v in ((.30,r.score_onchain),(.20,r.score_dev),(.25,r.score_tokenomics),(.15,r.score_narrative)) if v is not None)>=.45} for r in rows]
 @app.get("/api/coins/{coin_id}/history")
