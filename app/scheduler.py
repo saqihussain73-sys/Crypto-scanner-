@@ -110,12 +110,12 @@ def run_scan():
             db.add(ScanResult(coin_id=coin_id,symbol=market.get("symbol"),name=market.get("name"),market_cap_usd=market.get("market_cap"),price_usd=market.get("current_price"),price_change_30d_pct=market.get("price_change_percentage_30d_in_currency"),ath_change_pct=market.get("ath_change_percentage"),revolut_listed=(market.get("symbol") or "").upper() in REVOLUT_SYMBOLS,score_total=total,score_onchain=subscores["onchain_usage"],score_dev=subscores["dev_activity"],score_tokenomics=subscores["tokenomics"],score_narrative=subscores["narrative"],score_momentum=subscores["momentum"],notes=notes))
         db.commit()
         status(db,"running",f"Saved market data for {len(universe)} coins; assessing fundamentals")
-        eligible=[c for c in universe if not c["id"].startswith("binance:")]
+        eligible=[c for c in universe if not c["id"].startswith("binance:") and c.get("current_price") and c.get("market_cap")]
         if not eligible:
             status(db,"complete","No resolved coin IDs available",success=True)
             return
         start=cursor.offset%len(eligible)
-        batch=(eligible[start:]+eligible[:start])[:min(DEEP_SCAN_BATCH_SIZE,5)]
+        batch=(eligible[start:]+eligible[:start])[:min(DEEP_SCAN_BATCH_SIZE,10)]
         completed=0
         try:
             category_momentum=coingecko.get_category_momentum()
