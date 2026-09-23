@@ -130,7 +130,7 @@ def run_scan():
             # A supply-only cache entry is incomplete regardless of its age.
             needs_about=not existing.get("description") or len(existing.get("description","").strip())<120
             fresh=cached_research and cached_research.updated_at and datetime.utcnow()-cached_research.updated_at<FUNDAMENTAL_TTL
-            if (not needs_about and fresh and previous and previous.scanned_at
+            if (not needs_about and existing.get("protocol_research_checked_at") and fresh and previous and previous.scanned_at
                     and datetime.utcnow()-previous.scanned_at<FUNDAMENTAL_TTL
                     and any(getattr(previous,key) is not None for key in ("score_onchain","score_dev","score_tokenomics","score_narrative"))):
                 completed+=1
@@ -164,10 +164,26 @@ def run_scan():
             if not detail:
                 completed+=1
                 continue
-            try:onchain=defillama.get_onchain_signal(coin_id)
+            onchain=None
+            try:
+                protocol=defillama.get_research(coin_id)
+                if protocol:
+                    onchain={"tvl_usd":protocol.get("tvl_usd"),"tvl_change_7d_pct":protocol.get("tvl_change_7d_pct"),"tvl_change_1m_pct":protocol.get("tvl_change_1m_pct")}
+                    # Economics can be slow or unavailable; preserve TVL and continue.
+                    if protocol.get("slug"):
+                        try:protocol["economics"]=defillama.get_protocol_economics(protocol["slug"])
+                        except Exception as exc:logger.info("Protocol economics unavailable for %s: %s",coin_id,exc)
+                detail["protocol_research"]=protocol
+                detail["protocol_research_checked_at"]=datetime.utcnow().isoformat()
+                if cached_research is None:
+                    cached_research=CachedResearch(coin_id=coin_id,payload=dict(detail))
+                    db.add(cached_research)
+                else:
+                    cached_research.payload=dict(detail)
+                    cached_research.updated_at=datetime.utcnow()
+                db.commit()
             except Exception as exc:
-                logger.warning("DeFiLlama failed for %s: %s",coin_id,exc)
-                onchain=None
+                logger.warning("DeFiLlama research unavailable for %s: %s",coin_id,exc)
             try:dev=github_activity.get_dev_activity(detail.get("github_repo"))
             except Exception as exc:
                 logger.warning("GitHub activity failed for %s: %s",coin_id,exc)
