@@ -101,7 +101,12 @@ def research_readiness(r, profile):
 @app.get("/api/coins")
 def list_coins(limit:int=Query(100,le=500),min_score:float=0.0,db:Session=Depends(get_session)):
     latest=(db.query(ScanResult.coin_id,func.max(ScanResult.scanned_at).label("max_ts")).group_by(ScanResult.coin_id).subquery())
-    rows=(db.query(ScanResult).join(latest,(ScanResult.coin_id==latest.c.coin_id)&(ScanResult.scanned_at==latest.c.max_ts)).order_by(ScanResult.score_total.desc()).limit(limit).all())
+    rows=(db.query(ScanResult).join(latest,(ScanResult.coin_id==latest.c.coin_id)&(ScanResult.scanned_at==latest.c.max_ts)).order_by(ScanResult.score_total.desc()).all())
+    # Select candidates after looking at the full latest snapshot, not the first
+    # 500 market-only records. Prefer priced coins with cached research.
+    researched_ids={x.coin_id for x in db.query(CachedResearch.coin_id).all()}
+    rows.sort(key=lambda r:(bool(r.price_usd and r.price_usd>0 and r.market_cap_usd and r.market_cap_usd>0),r.coin_id in researched_ids,r.score_onchain is not None or r.score_dev is not None or r.score_tokenomics is not None,r.market_cap_usd or 0),reverse=True)
+    rows=rows[:limit]
     research_by_id={x.coin_id:{"description":x.payload.get("description"),"homepage":x.payload.get("homepage"),"whitepaper":x.payload.get("whitepaper"),"source_url":x.payload.get("source_url"),"circulating_supply":x.payload.get("circulating_supply"),"max_supply":x.payload.get("max_supply"),"total_supply":x.payload.get("total_supply"),"total_volume_24h_usd":x.payload.get("total_volume_24h_usd"),**{k:x.payload.get(k) for k in ("token_utility","token_utility_source","token_demand_mechanism","token_demand_source","adoption_evidence","adoption_source","adoption_observed_at","supply_risk_assessment","supply_risk_source","liquidity_assessment","liquidity_source","liquidity_observed_at","valuation_comparison","valuation_source","valuation_limitations","specific_risks","risk_source")},"updated_at":x.updated_at.isoformat() if x.updated_at else None} for x in db.query(CachedResearch).filter(CachedResearch.coin_id.in_([r.coin_id for r in rows])).all()}
     # The dashboard must not make hundreds of sequential external HTTP requests.
     # Protocol enrichment belongs in the scheduled research pipeline.
