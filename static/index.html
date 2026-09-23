@@ -15,9 +15,12 @@ function field(parent,tag,cls,value){const n=document.createElement(tag);if(cls)
 function render(){
  const min=Number(el('minScore').value)||0;
  const view=el('view').value;
- const data=coins.filter(c=>(view==='ready'?c.research_readiness?.ready:view==='queue'?!c.research_readiness?.ready:view==='progress'?true:true)&&(!c.fundamentals_ready||c.score_total>=min)).sort((a,b)=>view!=='fundamentals'
-  ?(a.name||a.symbol||'').localeCompare(b.name||b.symbol||'')
-  :Number(b.fundamentals_ready)-Number(a.fundamentals_ready)||(b.fundamentals_ready?(b.score_total||0)-(a.score_total||0):(b.coverage_pct||0)-(a.coverage_pct||0))).slice(0,view==='ready'||view==='progress'?100:500);
+ const valid=c=>Number.isFinite(Number(c.price_usd))&&Number(c.price_usd)>0&&Number.isFinite(Number(c.market_cap_usd))&&Number(c.market_cap_usd)>0;
+ const depth=c=>(c.research_readiness?.completed||0)*10+(c.five_x_research?.observations||[]).filter(o=>o.source).length*3+(c.project_research?.description?2:0)+(c.fundamentals_ready?1:0);
+ const data=coins.filter(c=>(view==='ready'?c.research_readiness?.ready:view==='progress'?valid(c):view==='queue'?!c.research_readiness?.ready:true)&&(!c.fundamentals_ready||c.score_total>=min)).sort((a,b)=>view==='progress'
+  ?depth(b)-depth(a)||Number(b.market_cap_usd)-Number(a.market_cap_usd)
+  :view==='fundamentals'?Number(b.fundamentals_ready)-Number(a.fundamentals_ready)||(b.coverage_pct||0)-(a.coverage_pct||0)
+  :(a.name||a.symbol||'').localeCompare(b.name||b.symbol||'')).slice(0,view==='ready'||view==='progress'?100:500);
  const root=el('coins');root.replaceChildren();
  for(const c of data){
   const card=field(root,'article','coin','');const top=field(card,'div','top','');const identity=field(top,'div','','');field(identity,'div','name',c.name||c.symbol||'Unknown');field(identity,'div','ticker',(c.symbol||'?').toUpperCase()+(c.revolut_listed?' · Revolut reference':''));
@@ -61,8 +64,8 @@ function render(){
     if(url&&/^https:\/\//i.test(url)){const a=document.createElement('a');a.href=url;a.target='_blank';a.rel='noopener noreferrer';a.textContent=label;about.append(a);about.append(document.createTextNode(' · '));}
   }
   if(research.updated_at)field(about,'p','notes','Project metadata retrieved: '+new Date(research.updated_at+'Z').toLocaleString());
-  field(card,'p','thesis',up.thesis||'Insufficient data for a valuation scenario.');
-  const details=document.createElement('details');card.append(details);field(details,'summary','','Valuation scenarios and data notes');if(up.x5_cap_usd!=null){field(details,'p','notes','5x requires '+money(up.x5_cap_usd)+' market cap; 10x requires '+money(up.x10_cap_usd)+' at unchanged circulating supply. These are arithmetic scenarios, not predictions.')}field(details,'p','notes',up.risk||'Price targets are hypothetical, not forecasts.');field(details,'summary','','Score breakdown');const dl=field(details,'dl','','');for(const [label,key] of [['On-chain usage','score_onchain'],['Developer activity','score_dev'],['Tokenomics','score_tokenomics'],['Narrative','score_narrative'],['Momentum','score_momentum']]){field(dl,'dt','',label);field(dl,'dd','',c[key]==null?'Not available':num(c[key],1)+'/100')}
+  if(up.thesis_status==='observed')field(card,'p','thesis',up.thesis);
+  const details=document.createElement('details');card.append(details);field(details,'summary','','Valuation scenarios and data notes');if(up.x5_cap_usd!=null){field(details,'p','notes','5x requires '+money(up.x5_cap_usd)+' market cap; 10x requires '+money(up.x10_cap_usd)+' at unchanged circulating supply. These are arithmetic scenarios, not predictions.')}field(details,'p','notes',up.risk||'Price targets are hypothetical, not forecasts.');field(details,'p','thesis','Score breakdown');const dl=field(details,'dl','','');for(const [label,key] of [['On-chain usage','score_onchain'],['Developer activity','score_dev'],['Tokenomics','score_tokenomics'],['Narrative','score_narrative'],['Momentum','score_momentum']]){field(dl,'dt','',label);field(dl,'dd','',c[key]==null?'Not available':num(c[key],1)+'/100')}
   field(details,'p','notes',(c.notes||[]).map(n=>n.replaceAll('_',' ')).join(' · ')||'No additional notes');field(details,'p','notes','Last scan: '+(c.scanned_at?new Date(c.scanned_at+'Z').toLocaleString():'Unknown'));
  }
  if(!data.length)field(root,'div','empty',view==='ready'?'No coins meet all research requirements yet. Use Research in progress to see the available research.':'No results yet. The initial scan may still be running.');
