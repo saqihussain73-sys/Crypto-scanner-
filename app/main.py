@@ -25,22 +25,11 @@ def upside_scenario(r):
     # A numerical score alone is not evidence for a project-specific return thesis.
     # Only show a thesis when it is backed by dated, attributed source observations.
     evidence=(r.notes or [])
-    research=None
-    if r.coin_id and not r.coin_id.startswith("binance:"):
-        try:
-            research=defillama.get_research(r.coin_id)
-        except Exception:
-            logging.exception("Protocol research unavailable for %s",r.coin_id)
-    thesis="Research pending — no verified coin-specific investment thesis available."
-    if research and research.get("tvl_usd") is not None and research.get("tvl_change_1m_pct") is not None:
-        direction="increased" if research["tvl_change_1m_pct"]>=0 else "decreased"
-        thesis=(f"{research['protocol']} protocol TVL {direction} "
-                f"{abs(research['tvl_change_1m_pct']):.1f}% over one month to "
-                f"${research['tvl_usd']:,.0f}; this measures protocol deposits, "
-                "not token-holder returns or a 5x forecast.")
+    # Never perform network calls while assembling a dashboard response.
+    thesis="Protocol research is shown in the sourced observations when available."
     return {"cap_tier":tier,"x5_cap_usd":cap*5 if cap and cap>0 else None,
             "x10_cap_usd":cap*10 if cap and cap>0 else None,
-            "thesis":thesis,"thesis_status":"observed" if research and research.get("tvl_usd") is not None and research.get("tvl_change_1m_pct") is not None else "pending","research":research,
+            "thesis":thesis,"thesis_status":"pending","research":None,
             "risk":"Token dilution, liquidity and future valuation have not been assessed."}
 
 def five_x_research(r, profile, protocol=None):
@@ -114,16 +103,9 @@ def list_coins(limit:int=Query(100,le=500),min_score:float=0.0,db:Session=Depend
     latest=(db.query(ScanResult.coin_id,func.max(ScanResult.scanned_at).label("max_ts")).group_by(ScanResult.coin_id).subquery())
     rows=(db.query(ScanResult).join(latest,(ScanResult.coin_id==latest.c.coin_id)&(ScanResult.scanned_at==latest.c.max_ts)).order_by(ScanResult.score_total.desc()).limit(limit).all())
     research_by_id={x.coin_id:{"description":x.payload.get("description"),"homepage":x.payload.get("homepage"),"whitepaper":x.payload.get("whitepaper"),"source_url":x.payload.get("source_url"),"circulating_supply":x.payload.get("circulating_supply"),"max_supply":x.payload.get("max_supply"),"total_supply":x.payload.get("total_supply"),"total_volume_24h_usd":x.payload.get("total_volume_24h_usd"),**{k:x.payload.get(k) for k in ("token_utility","token_utility_source","token_demand_mechanism","token_demand_source","adoption_evidence","adoption_source","adoption_observed_at","supply_risk_assessment","supply_risk_source","liquidity_assessment","liquidity_source","liquidity_observed_at","valuation_comparison","valuation_source","valuation_limitations","specific_risks","risk_source")},"updated_at":x.updated_at.isoformat() if x.updated_at else None} for x in db.query(CachedResearch).filter(CachedResearch.coin_id.in_([r.coin_id for r in rows])).all()}
+    # The dashboard must not make hundreds of sequential external HTTP requests.
+    # Protocol enrichment belongs in the scheduled research pipeline.
     protocol_by_id={}
-    for r in rows:
-        if r.coin_id and not r.coin_id.startswith("binance:"):
-            try:
-                protocol=defillama.get_research(r.coin_id)
-                if protocol and protocol.get("slug"):
-                    try:protocol["economics"]=defillama.get_protocol_economics(protocol["slug"])
-                    except Exception as exc:logging.info("Protocol economics unavailable for %s: %s",r.coin_id,exc)
-                protocol_by_id[r.coin_id]=protocol
-            except Exception as exc:logging.warning("Protocol research unavailable for %s: %s",r.coin_id,exc)
     return [{"research_readiness":research_readiness(r,research_by_id.get(r.coin_id)),"project_research":research_by_id.get(r.coin_id),"five_x_research":five_x_research(r,research_by_id.get(r.coin_id),protocol_by_id.get(r.coin_id)),**{k:getattr(r,k) for k in ("coin_id","symbol","name","market_cap_usd","price_usd","price_change_30d_pct","ath_change_pct","revolut_listed","score_total","score_onchain","score_dev","score_tokenomics","score_narrative","score_momentum","notes")},"scanned_at":r.scanned_at.isoformat() if r.scanned_at else None,"upside":upside_scenario(r),"coverage_pct":round(100*sum(w for w,v in ((.30,r.score_onchain),(.20,r.score_dev),(.25,r.score_tokenomics),(.15,r.score_narrative),(.10,r.score_momentum)) if v is not None)),"fundamentals_ready":sum(v is not None for v in (r.score_onchain,r.score_dev,r.score_tokenomics,r.score_narrative))>=2 and sum(w for w,v in ((.30,r.score_onchain),(.20,r.score_dev),(.25,r.score_tokenomics),(.15,r.score_narrative)) if v is not None)>=.45} for r in rows]
 @app.get("/api/coins/{coin_id}/history")
 def coin_history(coin_id:str,db:Session=Depends(get_session)):
